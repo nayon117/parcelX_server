@@ -1,7 +1,7 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 dotenv.config();
 
 
@@ -32,10 +32,16 @@ async function run() {
     const db = client.db('parcelXDB');
     const parcelCollection = db.collection('parcels');
 
-    // get all parcels
+    // GET all parcels or by user email and sorted by latest
     app.get('/parcels', async (req, res) => {
       try {
-        const parcels = await parcelCollection.find().toArray();
+        const email = req.query.email;
+        const query = email ? { created_by: email } : {};
+        const options = {
+          sort: { createdAt: -1 }
+        };
+
+        const parcels = await parcelCollection.find(query, options).toArray();
         res.send(parcels);
       } catch (error) {
         console.error("Error fetching parcels:", error);
@@ -55,8 +61,18 @@ async function run() {
       }
     });
 
-
-
+    // delete a parcel by _id
+    app.delete('/parcels/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await parcelCollection.deleteOne(query);
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting parcel:", error);
+        res.status(500).send("Error deleting parcel");
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
