@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 dotenv.config();
-
+const stripe = require("stripe")(process.env.PAYMENT_GATEWAY_KEY);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -31,6 +31,7 @@ async function run() {
 
     const db = client.db('parcelXDB');
     const parcelCollection = db.collection('parcels');
+    const paymentCollection = db.collection('payments');
 
     // GET all parcels or by user email and sorted by latest
     app.get('/parcels', async (req, res) => {
@@ -46,6 +47,19 @@ async function run() {
       } catch (error) {
         console.error("Error fetching parcels:", error);
         res.status(500).send("Error fetching parcels");
+      }
+    });
+
+    // get a single parcel by id
+    app.get('/parcels/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const parcel = await parcelCollection.findOne(query);
+        res.send(parcel);
+      } catch (error) {
+        console.error("Error fetching parcel:", error);
+        res.status(500).send("Error fetching parcel");
       }
     });
 
@@ -71,6 +85,81 @@ async function run() {
       } catch (error) {
         console.error("Error deleting parcel:", error);
         res.status(500).send("Error deleting parcel");
+      }
+    });
+
+    // GET: get payment by email or all payments also sorted by latest
+    app.get('/payments', async (req, res) => {
+      try {
+        const email = req.query.email;
+        const query = email ? { email } : {};
+        const options = {
+          sort: { paid_at: -1 }
+        };
+        const payments = await paymentCollection.find(query, options).toArray();
+        res.send(payments);
+      } catch (error) {
+        console.error("Error fetching payments:", error);
+        res.status(500).send("Error fetching payments");
+      }
+    });
+
+    // POST: record payment and update parcel status
+    app.post('/payments', async (req, res) => {
+      try {
+        const {id, email, amount, paymentMethod, transactionId } = req.body;
+
+        const updateResult = await parcelCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { payment_status: 'paid'} }
+        );
+
+        if(updateResult.modifiedCount === 0) {
+          return res.status(404).send("Parcel not found or already paid");
+        }
+
+        const paymentDoc = {
+          parcelId: id,
+          email,
+          amount,
+          paymentMethod,
+          transactionId,
+          paid_at_string: new Date().toISOString(),
+          paid_at: new Date()
+        }
+        const paymentResult = await paymentCollection.insertOne(paymentDoc);
+
+        res.status(201).send({
+          message: "Payment recorded and parcel updated",
+          updateResult,
+          insertedId: paymentResult.insertedId
+         });
+       
+      } catch (error) {
+        console.error("Error processing payment:", error);
+        res.status(500).send("Error processing payment");
+      }
+    });
+
+
+
+    // create payment intent
+    app.post('/create-payment-intent', async (req, res) => {
+      try {
+        const { amount } = req.body;
+
+        // Create a payment intent using Stripe API
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount,
+          currency: 'usd', 
+          payment_method_types: ['card'],
+
+        });
+
+        res.json({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        console.error("Error creating payment intent:", error);
+        res.status(500).send("Error creating payment intent");
       }
     });
 
