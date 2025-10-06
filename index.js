@@ -65,6 +65,16 @@ async function run() {
       }
     };
 
+    // verify Admin
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decodedUser.email;
+      const user = await userCollection.findOne({ email });
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "Forbidden" });
+      }
+      next();
+    };
+
     // riders collection---------------------
     //POST: add a new rider
     app.post("/riders", async (req, res) => {
@@ -78,8 +88,85 @@ async function run() {
       }
     });
 
+    // GET: riders by district
+    app.get("/riders", async (req, res) => {
+      try {
+        const { district } = req.query;
+        if (!district)
+          return res.status(400).send({ message: "District is required" });
+
+        const riders = await riderCollection
+          .find({ district: district, status: "approved" }) // only approved riders
+          .toArray();
+
+        res.send(riders);
+      } catch (error) {
+        console.error("Error fetching riders by district:", error);
+        res.status(500).send({ message: "Error fetching riders" });
+      }
+    });
+
+    // POST: assign rider to a parcel
+    // POST: assign rider to a parcel
+    app.post(
+      "/parcels/:id/assign-rider",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { riderId } = req.body;
+
+          if (!riderId)
+            return res.status(400).send({ message: "Rider ID is required" });
+
+          const rider = await riderCollection.findOne({
+            _id: new ObjectId(riderId),
+          });
+          if (!rider)
+            return res.status(404).send({ message: "Rider not found" });
+
+          // Update parcel
+          const parcelUpdateResult = await parcelCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                assignedRider: {
+                  id: rider._id,
+                  name: rider.name,
+                  email: rider.email,
+                },
+                delivery_status: "in_transit",
+              },
+            }
+          );
+
+          // Update rider work status
+          const riderUpdateResult = await riderCollection.updateOne(
+            { _id: new ObjectId(riderId) },
+            { $set: { work_status: "in_delivery" } }
+          );
+
+          if (parcelUpdateResult.modifiedCount === 0) {
+            return res
+              .status(404)
+              .send({ message: "Parcel not found or already assigned" });
+          }
+
+          res.send({
+            success: true,
+            message:
+              "Rider assigned, parcel is now in transit, rider in delivery",
+          });
+        } catch (error) {
+          console.error("Error assigning rider:", error);
+          res.status(500).send({ message: "Error assigning rider" });
+        }
+      }
+    );
+
     // GET: all pending riders
-    app.get("/riders/pending", async (req, res) => {
+    app.get("/riders/pending", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const pendingRiders = await riderCollection
           .find({ status: "pending" })
@@ -92,7 +179,7 @@ async function run() {
     });
 
     // GET: all approved riders
-    app.get("/riders/approved", async (req, res) => {
+    app.get("/riders/approved", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const approvedRiders = await riderCollection
           .find({ status: "approved" })
@@ -109,12 +196,21 @@ async function run() {
     app.patch("/riders/:id/status", async (req, res) => {
       try {
         const { id } = req.params;
-        const { status } = req.body; 
+        const { status, email } = req.body;
 
         const result = await riderCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: { status } }
         );
+
+        // update user role for accepting riders
+        if (status == "approved") {
+          const useQuery = { email: email };
+          const updateDoc = {
+            $set: { role: "rider" },
+          };
+          await userCollection.updateOne(useQuery, updateDoc);
+        }
 
         res.send(result);
       } catch (error) {
@@ -124,6 +220,56 @@ async function run() {
     });
 
     // users collection---------------------
+
+    // GET:users/search
+    app.get("/users/search", async (req, res) => {
+      try {
+        const email = req.query.email;
+        const regex = new RegExp(email, "i");
+        const users = await userCollection
+          .find({ email: { $regex: regex } })
+          .limit(10)
+          .toArray();
+        res.send(users);
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).send("Error fetching users");
+      }
+    });
+
+    // GET: users/:email/role
+    app.get("/users/:email/role", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).send({ message: "User not found" });
+        }
+        res.send({ role: user.role });
+      } catch (error) {
+        console.error("Error fetching user role:", error);
+        res.status(500).send("Error fetching user role");
+      }
+    });
+
+    // PATCH: users/:id/role
+    app.patch("/users/:id/role", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { role } = req.body;
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role } }
+        );
+
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating user role:", error);
+        res.status(500).send("Error updating user role");
+      }
+    });
+
     // POST: add a new user if not exists
     app.post("/users", async (req, res) => {
       try {
@@ -152,8 +298,18 @@ async function run() {
     // GET all parcels or by user email and sorted by latest
     app.get("/parcels", verifyToken, async (req, res) => {
       try {
-        const email = req.query.email;
-        const query = email ? { created_by: email } : {};
+        const { email, payment_status, delivery_status } = req.query;
+        let query = {};
+        if (email) {
+          query = { created_by: email };
+        }
+        if (payment_status) {
+          query.payment_status = payment_status;
+        }
+        if (delivery_status) {
+          query.delivery_status = delivery_status;
+        }
+
         const options = {
           sort: { createdAt: -1 },
         };
