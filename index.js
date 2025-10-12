@@ -13,7 +13,9 @@ const PORT = process.env.PORT || 5000;
 app.use(express.json());
 app.use(cors());
 
-const serviceAccount = require("./firebase-admin-key.json");
+const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString("utf8");
+
+const serviceAccount = JSON.parse(decodedKey);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -32,7 +34,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("parcelXDB");
     const parcelCollection = db.collection("parcels");
@@ -167,27 +169,33 @@ async function run() {
     });
 
     // GET: Completed deliveries for a specific rider
-// GET: all completed parcels for a rider (server-side)
-app.get("/rider/completed-parcels", verifyToken, verifyRider, async (req, res) => {
-  try {
-    const email = req.query.email;
-    if (!email) return res.status(400).send({ message: "Rider email is required" });
+    // GET: all completed parcels for a rider (server-side)
+    app.get(
+      "/rider/completed-parcels",
+      verifyToken,
+      verifyRider,
+      async (req, res) => {
+        try {
+          const email = req.query.email;
+          if (!email)
+            return res.status(400).send({ message: "Rider email is required" });
 
-    const completedParcels = await parcelCollection
-      .find({
-        assigned_rider_email: email,
-        delivery_status: { $in: ["delivered", "service_center_delivered"] },
-      })
-      .toArray();
+          const completedParcels = await parcelCollection
+            .find({
+              assigned_rider_email: email,
+              delivery_status: {
+                $in: ["delivered", "service_center_delivered"],
+              },
+            })
+            .toArray();
 
-    res.send(completedParcels);
-  } catch (err) {
-    console.error("Error fetching completed parcels:", err);
-    res.status(500).send({ message: "Internal Server Error" });
-  }
-});
-
-
+          res.send(completedParcels);
+        } catch (err) {
+          console.error("Error fetching completed parcels:", err);
+          res.status(500).send({ message: "Internal Server Error" });
+        }
+      }
+    );
 
     // PATCH: update rider status by id
 
@@ -377,11 +385,11 @@ app.get("/rider/completed-parcels", verifyToken, verifyRider, async (req, res) =
         try {
           const { id } = req.params;
           const { delivery_status, rider_email } = req.body;
-          const updatedDoc = { delivery_status }
+          const updatedDoc = { delivery_status };
 
-          if(delivery_status === "in_transit"){
+          if (delivery_status === "in_transit") {
             updatedDoc.picked_at = new Date().toISOString();
-          } else if (delivery_status === "delivered"){
+          } else if (delivery_status === "delivered") {
             updatedDoc.delivered_at = new Date().toISOString();
           }
 
@@ -480,6 +488,20 @@ app.get("/rider/completed-parcels", verifyToken, verifyRider, async (req, res) =
       } catch (error) {
         console.error("Error fetching payments:", error);
         res.status(500).send("Error fetching payments");
+      }
+    });
+
+    // ✅ Admin route to get all payments
+    app.get("/admin/payments", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const payments = await paymentCollection
+          .find()
+          .sort({ paid_at: -1 })
+          .toArray();
+        res.send(payments);
+      } catch (error) {
+        console.error("Error fetching all payments:", error);
+        res.status(500).send("Error fetching all payments");
       }
     });
 
