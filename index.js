@@ -13,7 +13,9 @@ const PORT = process.env.PORT || 5000;
 app.use(express.json());
 app.use(cors());
 
-const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString("utf8");
+const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf8"
+);
 
 const serviceAccount = JSON.parse(decodedKey);
 
@@ -273,6 +275,24 @@ async function run() {
       } catch (error) {
         console.error("Error updating user role:", error);
         res.status(500).send("Error updating user role");
+      }
+    });
+
+    // PATCH: /users/:id/profile
+    app.patch("/users/:id/profile", verifyToken, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const updateData = req.body; 
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+
+        res.send({ success: true, modifiedCount: result.modifiedCount });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to update profile" });
       }
     });
 
